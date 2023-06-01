@@ -1,6 +1,5 @@
 module MonteCarloRadiativeTransfer
 
-using Adapt
 using CUDA
 using DataFrames: DataFrame
 using DocStringExtensions: SIGNATURES
@@ -77,9 +76,7 @@ function collect_rt!(cfg::Config, g::AbstractGeometry, irt, I, k, x, idx, theta_
             if t <= cfg.τ₀
                 next = exp(-t)
                 I′′ = I′ * cfg.inorm[j1] * next
-                for i in 1:4
-                    CUDA.@atomic irt[i, j1, j2] += I′′[i]
-                end
+                @views irt[:, j1, j2] .+= I′′
                 acc += I′′[1]
             end
         end
@@ -88,13 +85,34 @@ function collect_rt!(cfg::Config, g::AbstractGeometry, irt, I, k, x, idx, theta_
     return acc
 end
 
-function kernel(cfg, g, I₀, k₀, Eₕ₀, Eᵥ₀, kpath, xpath, idxpath, A, Irt)
-    tid = threadIdx().x
-    bid = blockIdx().x
-    nid = (bid - 1) * blockDim().x + tid
-    stride = blockDim().x * gridDim().x
+function simulate(cfg::Config, g::AbstractGeometry, I₀)
+    θ₀, ϕ₀ = incidence_angle(g)
+    k₀ = ray_to_norm(Vec3(0.0, 0.0, 1.0), θ₀, ϕ₀)
+    Eₕ₀ = ray_to_norm(Vec3(0.0, -1.0, 0.0), θ₀, ϕ₀)
+    Eᵥ₀ = ray_to_norm(Vec3(1.0, 0.0, 0.0), θ₀, ϕ₀)
 
-    for _ in nid:stride:(cfg.number_of_rays)
+    # Directly transmitted proportion
+    Adt = 0.0
+
+    # Absorbed proportion
+    Aabs = 0.0
+
+    # Reflected proportion
+    Aref = 0.0
+
+    # Transmitted proportion
+    Atrans = 0.0
+
+    # Remaining proportion
+    Arem = 0.0
+    kpath = zeros(Vec3, cfg.maximum_scattering_times) # Direction
+    xpath = zeros(Vec3, cfg.maximum_scattering_times) # Position
+    idxpath = zeros(Int, cfg.maximum_scattering_times) # Layer index
+
+    Irt = zeros(4, cfg.Nθ, cfg.Nϕ)
+
+    Threads.@threads for _ in 1:(cfg.number_of_rays)
+        tid = Threads.threadid()
         I = I₀
         k = k₀
         Eₕ = Eₕ₀
@@ -107,7 +125,7 @@ function kernel(cfg, g, I₀, k₀, Eₕ₀, Eᵥ₀, kpath, xpath, idxpath, A, 
         if can_direct_transmit(g)
             τ′ = distance_to_boundary(g, x, k, idx)
             dt = τ′ <= cfg.τ₀ ? exp(-τ′) : 0.0
-            CUDA.@atomic A[1] += I[1] * dt
+            Adt += I[1] * dt
             I *= 1 - dt
         end
 
@@ -118,9 +136,9 @@ function kernel(cfg, g, I₀, k₀, Eₕ₀, Eᵥ₀, kpath, xpath, idxpath, A, 
         while I[1] >= cfg.minimum_intensity &&
             scattered_times < cfg.maximum_scattering_times
             scattered_times += 1
-            kpath[scattered_times, nid] = k
-            xpath[scattered_times, nid] = x
-            idxpath[scattered_times, nid] = idx
+            kpath[scattered_times] = k
+            xpath[scattered_times] = x
+            idxpath[scattered_times] = idx
 
             I′, k′, x′, idx′, Eₕ′, Eᵥ′ = I, k, x, idx, Eₕ, Eᵥ
             while true
@@ -167,7 +185,7 @@ function kernel(cfg, g, I₀, k₀, Eₕ₀, Eᵥ₀, kpath, xpath, idxpath, A, 
             end
 
             # Absorption
-            CUDA.@atomic A[2] += (1.0 - albedo(g, idx)) * I[1]
+            Aabs += (1.0 - albedo(g, idx)) * I[1]
             I *= albedo(g, idx)
 
             # Energy collection
@@ -190,48 +208,25 @@ function kernel(cfg, g, I₀, k₀, Eₕ₀, Eᵥ₀, kpath, xpath, idxpath, A, 
                 Itrans = collect_rt!(cfg, g, Irt, I, k, x, idx, theta_range)
             end
 
-            CUDA.@atomic A[3] += Iref
-            CUDA.@atomic A[4] += Itrans
+            Aref += Iref
+            Atrans += Itrans
 
             # Renormalize the Stokes vector
             Iesc = Iref + Itrans
+            @assert I[1]>Iesc "I = $(I[1]) < Iesc = $(Iesc)"
             I = I′ * (I[1] - Iesc) / I′[1]
             k, x, idx, Eₕ, Eᵥ = k′, x′, idx′, Eₕ′, Eᵥ′
         end
 
-        CUDA.@atomic A[5] += I[1]
+        Arem += I[1]
     end
-end
-
-function simulate(cfg::Config, g::AbstractGeometry, I₀)
-    θ₀, ϕ₀ = incidence_angle(g)
-    k₀ = ray_to_norm(Vec3(0.0, 0.0, 1.0), θ₀, ϕ₀)
-    Eₕ₀ = ray_to_norm(Vec3(0.0, -1.0, 0.0), θ₀, ϕ₀)
-    Eᵥ₀ = ray_to_norm(Vec3(1.0, 0.0, 0.0), θ₀, ϕ₀)
-
-    # Adt, Aabs, Aref, Atrans, Arem
-    A = CUDA.zeros(Float64, 5)
-    threads = min(cfg.maximum_threads, cfg.number_of_rays)
-    kpath = CUDA.zeros(Vec3, cfg.maximum_scattering_times, threads) # Direction
-    xpath = CUDA.zeros(Vec3, cfg.maximum_scattering_times, threads) # Position
-    idxpath = CUDA.zeros(Int, cfg.maximum_scattering_times, threads) # Layer index
-
-    Irt_gpu = CUDA.zeros(Float64, 4, cfg.Nθ, cfg.Nϕ)
-
-    @cuda threads=256 blocks=cld(threads, 256) kernel(cfg, g, I₀, k₀, Eₕ₀, Eᵥ₀, kpath,
-                                                      xpath, idxpath, A,
-                                                      Irt_gpu)
-
-    Adt, Aabs, Aref, Atrans, Arem = Array(A)
-    Irt_cpu = Array(Irt_gpu)
-    CUDA.unsafe_free!(Irt_gpu)
 
     return Adt / cfg.number_of_rays,
            Aabs / cfg.number_of_rays,
            Aref / cfg.number_of_rays,
            Atrans / cfg.number_of_rays,
            Arem / cfg.number_of_rays,
-           Irt_cpu / cfg.number_of_rays
+           Irt / cfg.number_of_rays
 end
 
 function run_rt(cfg::Config, s::SphereGeometry)
@@ -246,9 +241,6 @@ function run_rt(cfg::Config, s::SphereGeometry)
 
     for i in axes(IS, 2)
         I = IS[:, i]
-        println("==============================")
-        @show I
-        println("==============================")
         Adt, Aabs, Aref, _, Arem, IRT = simulate(cfg, s, I)
 
         if iszero(I[4]) # Linear
@@ -283,14 +275,13 @@ function run_rt(cfg::Config, s::SphereGeometry)
 
     Gsca = Gdt + Gref
     renorm = 1 / Gsca
-    norm = Array(normalize_coefficient(cfg, s))
+    norm = normalize_coefficient(cfg, s)
 
-    for i in 1:4, j in 1:4
-        @views MRT[i, j, :] .*= renorm .* norm
+    for j1 in 1:(cfg.Nθ)
+        @views MRT[:, :, j1] .*= renorm * norm[j1]
     end
 
-    cosθ = Array(cfg.cosθ)
-    SM_rt = DataFrame(:θ => 180.0 / π * acos.(cosθ),
+    SM_rt = DataFrame(:θ => 180.0 / π * acos.(cfg.cosθ),
                       [Symbol(:s, i, j) => MRT[i, j, :] for i in 1:4 for j in 1:4]...)
 
     return SM_rt
@@ -306,9 +297,6 @@ function run_rt(cfg::Config, p::PlaneGeometry)
 
     for i in axes(IS, 2)
         I = IS[:, i]
-        println("==============================")
-        @show I
-        println("==============================")
         Adt, Aabs, Aref, Atrans, Arem, IRT = simulate(cfg, p, I)
         k1 = 0
         k2 = 0.0
@@ -350,22 +338,38 @@ function run_rt(cfg::Config, p::PlaneGeometry)
     # TODO: RT-CB does not do renorm here, why?
     # Gsca = Gdt + Gref + Gtrans
     # renorm = 1 / Gsca
-    norm = Array(normalize_coefficient(cfg, p))
+    norm = normalize_coefficient(cfg, p)
 
     for j2 in 1:(cfg.Nϕ)
-        for i in 1:4, j in 1:4
-            @views MRT[i, j, :, j2] .*= norm
+        for j1 in 1:(cfg.Nθ)
+            @views MRT[:, :, j1, j2] .*= norm[j1]
         end
     end
 
-    cosθ = Array(cfg.cosθ)
-    ϕ = Array(cfg.ϕ)
-    SM_rt = DataFrame(:θ => repeat(180.0 / π * acos.(cosθ); outer = cfg.Nϕ),
-                      :ϕ => repeat(180.0 / π * ϕ; inner = cfg.Nθ),
+    SM_rt = DataFrame(:θ => repeat(180.0 / π * acos.(cfg.cosθ); outer = cfg.Nϕ),
+                      :ϕ => repeat(180.0 / π * cfg.ϕ; inner = cfg.Nθ),
                       [Symbol(:s, i, j) => reshape(MRT[i, j, :, :], (:)) for i in 1:4
                        for j in 1:4]...)
 
     return SM_rt
 end
+
+# function kernel(a, n)
+#     idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+#     stride = blockDim().x * gridDim().x
+
+#     r = RayleighScatterer(0.5, 10.0)
+#     for i in idx:stride:n
+#         P, cthe = phase_matrix(r)
+#         CUDA.atomic_add!(pointer(a, threadIdx().x), 1.0)
+#     end
+# end
+
+# function exec()
+#     arr = CUDA.zeros(Float64, 32)
+#     @cuda threads=32 blocks=20 kernel(arr, 10000000)
+#     CUDA.device_synchronize()
+#     arr
+# end
 
 end
