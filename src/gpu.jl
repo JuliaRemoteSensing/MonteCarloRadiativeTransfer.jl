@@ -275,17 +275,22 @@ function gpu_kernel(cfg, g, I₀, k₀, Eₕ₀, Eᵥ₀, kpath, xpath, idxpath,
             Iref = 0.0
             Itrans = 0.0
 
-            if minimum_distance_to_first_boundary(g, x, idx) <= cfg.τ₀
-                # CB
-                collect_cb_gpu!(cfg, g, Icb, I, k, x, idx, I₀, xpath, kpath, idxpath, nid,
-                                scattered_times)
+            near_upper = minimum_distance_to_first_boundary(g, x, idx) <= cfg.τ₀
+            near_lower = minimum_distance_to_last_boundary(g, x, idx) <= cfg.τ₀
 
-                # RT
+            # CB
+            if cfg.compute_cb && (near_upper || near_lower)
+                collect_cb_gpu!(cfg, g, Icb, I, k, x, idx, I₀, xpath, kpath, idxpath,
+                                nid,
+                                scattered_times)
+            end
+
+            # RT
+            if near_upper
                 Iref = collect_rt_gpu!(cfg, g, Irt, I, k, x, idx, upper)
             end
 
-            if minimum_distance_to_last_boundary(g, x, idx) <= cfg.τ₀
-                # RT
+            if near_lower
                 Itrans = collect_rt_gpu!(cfg, g, Irt, I, k, x, idx, lower)
             end
 
