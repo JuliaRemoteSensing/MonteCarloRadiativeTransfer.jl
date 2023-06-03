@@ -8,9 +8,17 @@ $(SIGNATURES)
 """
 function spherical_from_cartesian(x)
     # r = 1 always holds for this program
-    θ = acos(x[3])
-    ϕ = hypot(x[1], x[2]) ≈ 0 ? 0.0 : atan(x[2], x[1])
-    return (θ = θ, ϕ = ϕ)
+    cosθ = x[3]
+    sinθ = √(1.0 - cosθ^2)
+    s² = x[1]^2 + x[2]^2
+    if s² < 1e-24
+        cosϕ, sinϕ = 1.0, 0.0
+    else
+        s⁻¹ = 1.0 / √s²
+        cosϕ = x[1] * s⁻¹
+        sinϕ = x[2] * s⁻¹
+    end
+    return (cosθ = cosθ, sinθ = sinθ, cosϕ = cosϕ, sinϕ = sinϕ)
 end
 
 """
@@ -18,8 +26,10 @@ Rotate the direction vector from the ray to the normal coordinate system. The ra
 
 $(SIGNATURES)
 """
-function ray_to_norm(x, θ, ϕ)
-    return RotZY(ϕ, θ) * x
+function ray_to_norm(x, cosθ, sinθ, cosϕ, sinϕ)
+    return Vec3(x[1] * cosθ * cosϕ - x[2] * sinϕ + x[3] * sinθ * cosϕ,
+                x[1] * cosθ * sinϕ + x[2] * cosϕ + x[3] * sinθ * sinϕ,
+                -x[1] * sinθ + x[3] * cosθ)
 end
 
 """
@@ -27,8 +37,10 @@ Rotate the direction vector from the normal to the ray coordinate system. The ra
 
 $(SIGNATURES)
 """
-function norm_to_ray(x, θ, ϕ)
-    return RotYZ(-θ, -ϕ) * x
+function norm_to_ray(x, cosθ, sinθ, cosϕ, sinϕ)
+    return Vec3(x[1] * cosθ * cosϕ + x[2] * cosθ * sinϕ - x[3] * sinθ,
+                -x[1] * sinϕ + x[2] * cosϕ,
+                x[1] * sinθ * cosϕ + x[2] * sinθ * sinϕ + x[3] * cosθ)
 end
 
 """
@@ -37,14 +49,14 @@ Calculate the directions of Eₕ and Eᵥ given the wave direction k.
 $(SIGNATURES)
 """
 function get_basis(k)
-    if k[3] ≈ 1.0
-        return Vec3(0, -1, 0), Vec3(1, 0, 0)
-    elseif k[3] ≈ -1.0
-        return Vec3(0, -1, 0), Vec3(-1, 0, 0)
+    if abs(k[3]) > 1.0 - eps()
+        return Vec3(0, -1, 0), Vec3(sign(k[3]), 0, 0)
     else
         Eᵥ₃ = -√(1.0 - k[3]^2)
-        return Vec3(k[2] / -Eᵥ₃, k[1] / Eᵥ₃, 0),
-               Vec3(-k[3] * k[1] / Eᵥ₃, -k[3] * k[2] / Eᵥ₃, Eᵥ₃)
+        Eᵥ₃⁻¹ = 1.0 / Eᵥ₃
+        Eₕ₁ = k[2] * -Eᵥ₃⁻¹
+        Eₕ₂ = k[1] * Eᵥ₃⁻¹
+        return Vec3(Eₕ₁, Eₕ₂, 0), Vec3(-k[3] * Eₕ₂, -k[3] * Eₕ₁, Eᵥ₃)
     end
 end
 
@@ -62,11 +74,11 @@ Rotate a Stokes vector by the rotation matrix
 
 Notice that in the code, the matrix is generated column-wise.
 """
-function rotate(I, ϕ)
+@inline function rotate(I, ϕ)
     return rotate(I, cos(2ϕ), sin(2ϕ))
 end
 
-function rotate(I, cos2ϕ, sin2ϕ)
+@inline function rotate(I, cos2ϕ, sin2ϕ)
     return Vec4(I[1], cos2ϕ * I[2] + sin2ϕ * I[3], -sin2ϕ * I[2] + cos2ϕ * I[3], I[4])
 end
 
@@ -75,23 +87,24 @@ Given a Stokes vector `I`, the incident direction `(θ, ϕ)`, which is given in 
 
 $(SIGNATURES)
 """
-function update_I(scatterer, I, k, θ, ϕ)
+function update_I(scatterer, I, k, cosθ, sinθ, cosϕ, sinϕ)
     Eₕ, Eᵥ = get_basis(k)
-    k = norm_to_ray(k, θ, ϕ)
+
+    k = norm_to_ray(k, cosθ, sinθ, cosϕ, sinϕ)
     ks = spherical_from_cartesian(k)
 
-    sinθₖ = sin(ks.θ)
-    cosθₖ = cos(ks.θ)
-    sinϕₖ = sin(ks.ϕ)
-    cosϕₖ = cos(ks.ϕ)
-    Eₕₖ = ray_to_norm(Vec3(sinϕₖ, -cosϕₖ, 0), θ, ϕ)
-    Eᵥₖ = ray_to_norm(Vec3(cosθₖ * cosϕₖ, cosθₖ * sinϕₖ, -sinθₖ), θ, ϕ)
+    cosθₖ = ks.cosθ
+    sinθₖ = ks.sinθ
+    cosϕₖ = ks.cosϕ
+    sinϕₖ = ks.sinϕ
+    Eₕₖ = ray_to_norm(Vec3(sinϕₖ, -cosϕₖ, 0), cosθ, sinθ, cosϕ, sinϕ)
+    Eᵥₖ = ray_to_norm(Vec3(cosθₖ * cosϕₖ, cosθₖ * sinϕₖ, -sinθₖ), cosθ, sinθ, cosϕ, sinϕ)
 
     cosψ = Eₕ[1] * Eₕₖ[1] + Eₕ[2] * Eₕₖ[2]
     sinψ = -Eₕ[1] * Eᵥₖ[1] - Eₕ[2] * Eᵥₖ[2]
 
     P, _ = phase_matrix(scatterer, k[3])
-    I′ = P * rotate(I, -ks.ϕ) # Note that we rotate the Stokes vector by -ϕ instead of ϕ here
+    I′ = P * rotate(I, ks.cosϕ^2 - ks.sinϕ^2, -2 * ks.sinϕ * ks.cosϕ) # Note that we rotate the Stokes vector by -ϕ instead of ϕ here
     I′ = rotate(I′, cosψ^2 - sinψ^2, 2 * sinψ * cosψ)
 
     return I′, Eₕ, Eᵥ
@@ -141,10 +154,11 @@ Get Stokes vector `I` from electric field `E`.
 $(SIGNATURES)
 """
 function I_from_E(E₁, E₂)
-    qh = abs(E₁)^2
-    qv = abs(E₂)^2
+    qh = real(E₁)^2 + imag(E₁)^2
+    qv = real(E₂)^2 + imag(E₂)^2
 
-    return Vec4(qh + qv, -qh + qv, E₂ * E₁' + E₂' * E₁, (E₂ * E₁' - E₂' * E₁) * 1.0im)
+    return Vec4(qh + qv, -qh + qv, real(E₂ * E₁' + E₂' * E₁),
+                real((E₂ * E₁' - E₂' * E₁) * 1.0im))
 end
 
 """
@@ -152,27 +166,28 @@ Given electric field `(E₁, E₂)`, the incident direction `(θ, ϕ)`, which is
 
 $(SIGNATURES)
 """
-function update_E(scatterer, E₁, E₂, k, θ, ϕ)
+function update_E(scatterer, E₁, E₂, k, cosθ, sinθ, cosϕ, sinϕ)
     Eₕ, Eᵥ = get_basis(k)
-    k = norm_to_ray(k, θ, ϕ)
+    k = norm_to_ray(k, cosθ, sinθ, cosϕ, sinϕ)
     ks = spherical_from_cartesian(k)
 
-    sinθₖ = sin(ks.θ)
-    cosθₖ = cos(ks.θ)
-    sinϕₖ = sin(ks.ϕ)
-    cosϕₖ = cos(ks.ϕ)
-    Eₕₖ = ray_to_norm(Vec3(sinϕₖ, -cosϕₖ, 0), θ, ϕ)
-    Eᵥₖ = ray_to_norm(Vec3(cosθₖ * cosϕₖ, cosθₖ * sinϕₖ, -sinθₖ), θ, ϕ)
+    cosθₖ = ks.cosθ
+    sinθₖ = ks.sinθ
+    cosϕₖ = ks.cosϕ
+    sinϕₖ = ks.sinϕ
+    Eₕₖ = ray_to_norm(Vec3(sinϕₖ, -cosϕₖ, 0), cosθ, sinθ, cosϕ, sinϕ)
+    Eᵥₖ = ray_to_norm(Vec3(cosθₖ * cosϕₖ, cosθₖ * sinϕₖ, -sinθₖ), cosθ, sinθ, cosϕ, sinϕ)
 
     cosψ = Eₕ[1] * Eₕₖ[1] + Eₕ[2] * Eₕₖ[2]
     sinψ = Eₕ[1] * Eᵥₖ[1] + Eₕ[2] * Eᵥₖ[2]
 
     S = amplitude_matrix(scatterer, k[3])
-    E₁′ = cosψ * S[1] * (E₁ * cosϕₖ + E₂ * sinϕₖ) + sinψ * S[2] * (-E₁ * sinϕₖ + E₂ * cosϕₖ)
-    E₂′ = -sinψ * S[1] * (E₁ * cosϕₖ + E₂ * sinϕₖ) +
-          cosψ * S[2] * (-E₁ * sinϕₖ + E₂ * cosϕₖ)
 
-    return E₁′, E₂′, Eₕ, Eᵥ
+    E₁, E₂ = E₁ * cosϕₖ + E₂ * sinϕₖ, -E₁ * sinϕₖ + E₂ * cosϕₖ
+    E₁, E₂ = S[1, 1] * E₁ + S[1, 2] * E₂, S[2, 1] * E₁ + S[2, 2] * E₂
+    E₁, E₂ = E₁ * cosψ + E₂ * sinψ, -E₁ * sinψ + E₂ * cosψ
+
+    return E₁, E₂, Eₕ, Eᵥ
 end
 
 """
@@ -180,15 +195,18 @@ Go through the scattering path from the second to the last scatterer.
 
 $(SIGNATURES)
 """
-function forward_E(scatterer, E₁, E₂, kpath, scattered_times, θ, ϕ)
+function forward_E(scatterer, E₁, E₂, kpath, scattered_times, cosθ, sinθ, cosϕ, sinϕ)
     enorm = 0.0
     norm0 = √(abs(E₁)^2 + abs(E₂)^2)
-
     E₁′ = E₁
     E₂′ = E₂
-    ks = (θ = θ, ϕ = ϕ)
+    ks = (cosθ = cosθ, sinθ = sinθ, cosϕ = cosϕ, sinϕ = sinϕ)
     for k in 2:scattered_times
-        E₁′, E₂′, _, _ = update_E(scatterer, E₁′, E₂′, kpath[k], ks.θ, ks.ϕ)
+        if isnan(E₁′)
+            continue
+        end
+        E₁′, E₂′, _, _ = update_E(scatterer, E₁′, E₂′, kpath[k], ks.cosθ, ks.sinθ, ks.cosϕ,
+                                  ks.sinϕ)
         norm2 = √(abs(E₁′)^2 + abs(E₂′)^2)
         E₁′ *= norm0 / norm2
         E₂′ *= norm0 / norm2
@@ -204,15 +222,16 @@ Go through the scattering path from the last to the second scatterer.
 
 $(SIGNATURES)
 """
-function backward_E(scatterer, E₁, E₂, kpath, scattered_times, θ, ϕ)
+function backward_E(scatterer, E₁, E₂, kpath, scattered_times, cosθ, sinθ, cosϕ, sinϕ)
     enorm = 0.0
     norm0 = √(abs(E₁)^2 + abs(E₂)^2)
 
     E₁′ = E₁
     E₂′ = E₂
-    ks = (θ = θ, ϕ = ϕ)
+    ks = (cosθ = cosθ, sinθ = sinθ, cosϕ = cosϕ, sinϕ = sinϕ)
     for k in scattered_times:-1:2
-        E₁′, E₂′, _, _ = update_E(scatterer, E₁′, E₂′, -kpath[k], ks.θ, ks.ϕ)
+        E₁′, E₂′, _, _ = update_E(scatterer, E₁′, E₂′, -kpath[k], ks.cosθ, ks.sinθ, ks.cosϕ,
+                                  ks.sinϕ)
         norm2 = √(abs(E₁′)^2 + abs(E₂′)^2)
         E₁′ *= norm0 / norm2
         E₂′ *= norm0 / norm2
@@ -267,6 +286,42 @@ function calculate_csrn(itp11, n)
     # Use linear interpolation to ensure csrn is monotonically increasing
     itp = linear_interpolation(xv[2:end], yv[2:end])
     csrn = itp(ex)
+end
+
+"""
+Generate a new direction for the given ray.
+
+$(SIGNATURES)
+"""
+function scatter(cfg::Config, g::AbstractGeometry, I, k, idx)
+    ks = spherical_from_cartesian(k)
+
+    # Generate polar scattering angle and compute scattering phase matrix
+    P, cosθ = phase_matrix(g, idx, -2.0)
+
+    # Generate azimuthal scattering angle
+    eq = -P[1, 2] * I[2] / (P[1, 1] * I[1])
+    eu = -P[1, 2] * I[3] / (P[1, 1] * I[1])
+    ee = √(eq^2 + eu^2)
+    if ee > 1e-12
+        γ = acos(eq / ee)
+        if eu < 0
+            γ = 2π - γ
+        end
+        ma = 4π * rand() + γ - ee * sin(γ)
+        ea = kepler_solver(ma, ee) # Use iterative Kepler solver according to Prof. Muinonen's advice
+        ϕ = 0.5 * (ea - γ)
+    else
+        ϕ = 2π * rand()
+    end
+
+    sinθ = √(1 - cosθ^2)
+    k′ = ray_to_norm(Vec3(sinθ * cos(ϕ), sinθ * sin(ϕ), cosθ), ks.cosθ, ks.sinθ, ks.cosϕ,
+                     ks.sinϕ)
+    I′, Eₕ, Eᵥ = update_I(scatterer(g, idx), I, k′, ks.cosθ, ks.sinθ, ks.cosϕ,
+                          ks.sinϕ)
+    I′ = I′ * (I[1] / I′[1])
+    return I′, k′, Eₕ, Eᵥ
 end
 
 # TODO: Geometric optics

@@ -68,6 +68,9 @@ Base.@kwdef struct Config{T <: AbstractGeometry, V <: AbstractVector}
     "Maximum number of threads to use"
     maximum_threads::Int = 8192
 
+    "Whether or not to compute coherent backscattering"
+    compute_cb::Bool = true
+
     "Maximum optical depth to consider"
     τ₀::Float64 = 50.0
 

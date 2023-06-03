@@ -2,6 +2,7 @@
 *.jl.cov
 *.jl.mem
 *.nsys-rep
+*.pb.gz
 /docs/build/
 /*.jl
 Manifest.toml
