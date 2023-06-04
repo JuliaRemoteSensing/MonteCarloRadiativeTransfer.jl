@@ -5,6 +5,7 @@ using CUDA
 using DataFrames: DataFrame
 using DocStringExtensions: SIGNATURES
 using FastGaussQuadrature: gausslegendre
+using Interpolations: linear_interpolation
 using LinearAlgebra: norm, ⋅, ×
 using Printf: @sprintf
 using Rotations: RotZY, RotYZ
@@ -83,7 +84,7 @@ function simulate(cfg::Config, g::AbstractGeometry, I₀; use_gpu)
            Icb_cpu / cfg.number_of_rays
 end
 
-function run_rt(cfg::Config, s::SphereGeometry; use_gpu = false, compute_cb = true)
+function run_rt(cfg::Config, s::SphereGeometry; use_gpu = false)
     validate(s)
 
     IS = initial_I(s)
@@ -94,7 +95,12 @@ function run_rt(cfg::Config, s::SphereGeometry; use_gpu = false, compute_cb = tr
     NFIB = @SVector [i * cfg.Nϕb ÷ 8 + 1 for i in 0:7]
 
     if use_gpu
-        cfg = adapt(CuArray, cfg)
+        s = SphereGeometry(s.R, s.n, adapt(CuArray, s.scatterer), s.τ, s.ω)
+        names = propertynames(cfg)
+        cfg = Config(;
+                     map(Pair, names,
+                         map(x -> adapt(CuArray, x), getproperty.(Ref(cfg), names)))...,
+                     geometry = s)
     end
 
     for i in axes(IS, 2)
@@ -186,7 +192,7 @@ function run_rt(cfg::Config, p::PlaneGeometry; use_gpu = false)
     MCB = zeros(4, 4, cfg.Nθb, cfg.Nϕb)
 
     if use_gpu
-        p = adapt(CuArray, p)
+        p = PlaneGeometry(p.θ, p.ϕ, CuArray(adapt.(CuArray, p.layers)))
         names = propertynames(cfg)
         cfg = Config(; map(Pair, names, getproperty.(Ref(cfg), names))..., geometry = p)
         cfg = adapt(CuArray, cfg)

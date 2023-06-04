@@ -20,6 +20,8 @@ Base.@kwdef struct SphereGeometry{T <: AbstractScatterer} <: AbstractGeometry
     ω::Float64 = single_scattering_albedo(scatterer)
 end
 
+Adapt.@adapt_structure SphereGeometry
+
 Base.firstindex(::SphereGeometry) = 1
 Base.lastindex(::SphereGeometry) = 1
 
