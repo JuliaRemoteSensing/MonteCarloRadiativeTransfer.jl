@@ -46,6 +46,7 @@ layers(p::PlaneGeometry) = length(p.layers)
 optical_depth(p::PlaneGeometry, idx) = p.layers[idx].τ
 albedo(p::PlaneGeometry, idx) = p.layers[idx].ω
 scatterer(p::PlaneGeometry, idx) = p.layers[idx].scatterer
+mean_free_path(p::PlaneGeometry, idx) = mean_free_path(p.layers[idx].scatterer)
 phase_matrix(p::PlaneGeometry, idx, cosθ) = phase_matrix(p.layers[idx].scatterer, cosθ)
 
 function validate(p::PlaneGeometry)

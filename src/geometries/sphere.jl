@@ -27,6 +27,7 @@ layers(::SphereGeometry) = 1
 optical_depth(s::SphereGeometry, _idx) = s.τ
 albedo(s::SphereGeometry, _idx) = s.ω
 scatterer(s::SphereGeometry, _idx) = s.scatterer
+mean_free_path(s::SphereGeometry, _idx) = mean_free_path(s.scatterer)
 phase_matrix(s::SphereGeometry, _idx, cosθ) = phase_matrix(s.scatterer, cosθ)
 
 function validate(s::SphereGeometry)

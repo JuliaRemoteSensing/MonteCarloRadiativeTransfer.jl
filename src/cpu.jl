@@ -71,8 +71,8 @@ function collect_cb_cpu!(cfg::Config, g::AbstractGeometry, Icb, I, k, x, idx, I�
 
         Eaf₁, Eaf₂, _, _ = update_E(sca, Ea₁, Ea₂, kf, kas.cosθ, kas.sinθ, kas.cosϕ,
                                     kas.sinϕ)
-        Ebf₁, Ebf₂, _, _ = update_E(sca, Eb₁, Eb₂, kf, kas.cosθ, kas.sinθ, kas.cosϕ,
-                                    kas.sinϕ)
+        Ebf₁, Ebf₂, _, _ = update_E(sca, Eb₁, Eb₂, kf, kbs.cosθ, kbs.sinθ, kbs.cosϕ,
+                                    kbs.sinϕ)
 
         raa = √(Iaf[1] / (real(Eaf₁)^2 + imag(Eaf₁)^2 + real(Eaf₂)^2 + imag(Eaf₂)^2))
         Ea₁ *= raa
@@ -91,7 +91,7 @@ function collect_cb_cpu!(cfg::Config, g::AbstractGeometry, Icb, I, k, x, idx, I�
                 Ebf₁, Ebf₂, Eₕ, Eᵥ = update_E(sca, Eb₁, Eb₂, kf, kbs.cosθ, kbs.sinθ,
                                               kbs.cosϕ, kbs.sinϕ)
 
-                ΔΦ = optical_depth(g, 1) * ((ki + kf) ⋅ (xa - xb))
+                ΔΦ = mean_free_path(g, 1) * ((ki + kf) ⋅ (xa - xb))
                 τa = distance_to_boundary(g, xa, kf, idxa)
                 if τa <= cfg.τ₀
                     nexta = exp(-0.5 * τa)
