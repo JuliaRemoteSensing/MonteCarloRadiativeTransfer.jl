@@ -1,15 +1,3 @@
-function detect_nan(v::ComplexF64)
-    if isnan(v)
-        CUDA.@cuprintln real(v), imag(v)
-    end
-end
-
-function detect_nan(v)
-    if isnan(v)
-        CUDA.@cuprintln v
-    end
-end
-
 """
 RT peel-off.
 

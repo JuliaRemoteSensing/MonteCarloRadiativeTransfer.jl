@@ -8,12 +8,13 @@ $(SIGNATURES)
 """
 function spherical_from_cartesian(x)
     # r = 1 always holds for this program
-    cosθ = x[3]
-    sinθ = √(1.0 - cosθ^2)
     s² = x[1]^2 + x[2]^2
     if s² < 1e-24
+        cosθ, sinθ = sign(x[3]), 0.0
         cosϕ, sinϕ = 1.0, 0.0
     else
+        cosθ = x[3]
+        sinθ = √(1.0 - cosθ^2)
         s⁻¹ = 1.0 / √s²
         cosϕ = x[1] * s⁻¹
         sinϕ = x[2] * s⁻¹
@@ -202,9 +203,6 @@ function forward_E(scatterer, E₁, E₂, kpath, scattered_times, cosθ, sinθ, 
     E₂′ = E₂
     ks = (cosθ = cosθ, sinθ = sinθ, cosϕ = cosϕ, sinϕ = sinϕ)
     for k in 2:scattered_times
-        if isnan(E₁′)
-            continue
-        end
         E₁′, E₂′, _, _ = update_E(scatterer, E₁′, E₂′, kpath[k], ks.cosθ, ks.sinθ, ks.cosϕ,
                                   ks.sinϕ)
         norm2 = √(abs(E₁′)^2 + abs(E₂′)^2)

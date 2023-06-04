@@ -139,7 +139,3 @@ function initial_weights(::PlaneGeometry, Nθ, Nϕ)
     sinθ = @. sqrt(1.0 - cosθ^2)
     return cosθ, sinθ, inorm
 end
-
-function normalize_coefficient(cfg::Config, p::PlaneGeometry)
-    return @. abs(cos(p.θ) / cfg.cosθ) / (4 * cfg.inorm)
-end

@@ -85,7 +85,3 @@ function initial_weights(::SphereGeometry, Nθ, Nϕ)
     inorm = w ./ 2Nϕ
     return cosθ, sinθ, inorm
 end
-
-function normalize_coefficient(cfg::Config, ::SphereGeometry)
-    return @. 1.0 / cfg.inorm
-end

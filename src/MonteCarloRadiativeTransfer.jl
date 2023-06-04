@@ -159,10 +159,11 @@ function run_rt(cfg::Config, s::SphereGeometry; use_gpu = false, compute_cb = tr
 
     Gsca = Gdt + Gref
     renorm = 1 / Gsca
-    norm = Array(normalize_coefficient(cfg, s))
+    inorm = Array(cfg.inorm)
+    norm = inv.(inorm)
 
     for i in 1:4, j in 1:4
-        @views MRT[i, j, :] .*= renorm .* norm
+        @. @views MRT[i, j, :] *= renorm * norm
     end
 
     MCB .*= renorm
@@ -249,7 +250,10 @@ function run_rt(cfg::Config, p::PlaneGeometry; use_gpu = false)
     # TODO: RT-CB does not do renorm here, why?
     # Gsca = Gdt + Gref + Gtrans
     # renorm = 1 / Gsca
-    norm = Array(normalize_coefficient(cfg, p))
+    cosθ = Array(cfg.cosθ)
+    cosθb = Array(cfg.cosθb)
+    inorm = Array(cfg.inorm)
+    norm = @. (abs ∘ inv)(4.0 * cosθ * inorm)
 
     for j2 in 1:(cfg.Nϕ)
         for i in 1:4, j in 1:4
@@ -257,18 +261,13 @@ function run_rt(cfg::Config, p::PlaneGeometry; use_gpu = false)
         end
     end
 
-    cosθ = Array(cfg.cosθ)
-    cosθb = Array(cfg.cosθb)
     ϕ = Array(cfg.ϕ)
     ϕb = Array(cfg.ϕb)
 
-    inorm = abs(cos(p.θ) / cosθb[1]) / 4.0
-    @views MCB[:, :, 1, 1] .*= inorm
-
-    for j1 in 2:(cfg.Nθb)
-        inorm = abs(cos(p.θ) / cosθb[j1]) / 4.0
+    for j1 in 1:(cfg.Nθb)
+        norm1 = inv(abs(4.0 * cosθb[j1]))
         for j2 in 1:(cfg.Nϕb)
-            @views MCB[:, :, j1, j2] .*= inorm
+            @views MCB[:, :, j1, j2] .*= norm1
         end
     end
 
